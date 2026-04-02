@@ -65,16 +65,18 @@ function dailyMarketETL() {
       }
     });
     
-    const rows = portSheet.getRange(3, 1, lastRow - 2, headers.length).getValues();
+    const rows = portSheet.getRange(4, 1, lastRow - 2, headers.length).getValues();
     const actionableSignals = [];
     const allActiveStocks = [];
     let volatileCount = 0;
     let processedCount = 0;
 
     console.log("⚙️ Starting Row-by-Row Compound Filter...");
-    
+
+    const mCapBuckets = { largeCaps: [], midCaps: [], smallCaps: [] };    
     rows.forEach((row, index) => {
       const stockName = row[col.stock];
+
       if (!stockName || row[col.pfCategory] === "04 Exited") return;
 
       const currentWeight = parseFloat(row[col.currentWeight]) || 0;
@@ -104,6 +106,13 @@ function dailyMarketETL() {
           triggerReason: isActionable ? `Rebalance (${(currentWeight*100).toFixed(1)}% vs ${rules.min*100}-${rules.max*100}%)` : "Volatility"
         });
       }   
+
+      // Check for MarketCaps
+      const cat = (mCapCat || "").toLowerCase();
+      if (cat.includes("large")) mCapBuckets.largeCaps.push(stockName);
+      else if (cat.includes("mid")) mCapBuckets.midCaps.push(stockName);
+      else if (cat.includes("small") || cat.includes("micro")) mCapBuckets.smallCaps.push(stockName);
+
       allActiveStocks.push(stockName);
       saveToSnapshots(stockName, stockObj);
 
@@ -119,8 +128,15 @@ function dailyMarketETL() {
 
     });
 
+  // --- LOGGING: Verify Buckets ---
+  console.info("📂 MCap Buckets Summary:");
+  console.log(`   🔵 Large: ${mCapBuckets.largeCaps}`);
+  console.log(`   🟡 Mid:   ${mCapBuckets.midCaps}`);
+  console.log(`   🟢 Small: ${mCapBuckets.smallCaps}`);
 
-  console.log(actionableSignals);
+  // --- LOGGING: Stock Lists ---
+  console.log(`All Stocks: ${allActiveStocks}`);
+  console.log(`Actionable Stocks: ${JSON.stringify(actionableSignals, null, 2)}`);
   console.info(`✅ SUCCESS: Processed ${processedCount} active stocks.`);
 
   // --- BLOCK 4: Search List Preparation ---
@@ -136,7 +152,8 @@ function dailyMarketETL() {
   return {
     macro: globalContext,
     signals: actionableSignals,
-    news_search_list: searchList
+    news_search_list: searchList,
+    mCapBuckets: mCapBuckets
   };
 
   } catch (e) {

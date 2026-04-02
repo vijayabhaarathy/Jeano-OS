@@ -3,61 +3,6 @@
  * Synthesizes SME data using dynamic principles from the Google Sheet.
  */
 
-function generateHealthTroubleshootBriefing() {
-  console.log("🌞 Jeano is waking up (Health-Only Mode)...");
-
-  // 1. GATHER DATA: Health Context
-  // This will pull from your Daily Logs or Firestore
-  const config = getJeanoConfig(); 
-  const healthData = getHealthContext("DAILY", 1, 1);
-  
-  // 2. CONSTRUCT THE HEALTH-ONLY PROMPT
-  // Market context blocks and 'etlData' references have been removed
-  const systemPrompt = `
-    ${config.Tone_Directives}
-
-    IDENTITY:
-    Address the user ONLY as "Vijay" or "V".
-
-    [CONTEXT: HEALTH]
-    DIRECTIVES: ${config.Health_Directives}
-    YESTERDAY'S STATS: ${healthData}
-    TARGETS: BMR ${config.Daily_BMR}, Protein ${config.Protein_Target}g.
-    
-    [STRICT HIERARCHY OF TRUTH]
-    1. INTERNAL DATA (Sheet): This is 100% accurate. You MUST use this.
-    2. EXTERNAL RESEARCH (Web): Only used for calorie/macro estimation if the sheet entry is "Unknown".
-    
-    TASK:
-    Produce a Health-Focused Briefing.
-
-    PART 1: DATA AUDIT (Table Only)
-    - Provide a "Health Snapshot" table: Metric | Actual | Target | Status.
-
-    PART 2: THE SYNTHESIS (Narrative)
-    - Tone: Sharp, direct, and witty. No fluff.
-    - Analyze protein adequacy and energy balance.
-    - Follow the hierarchy of truth mandatorily.
-    - Check Gout/Hyperuricemia risks in meal logs (Check for high-purine foods if Uric Acid is a concern).
-    - If data is skewed (like impossible calorie counts), mention it as a data error.
-
-    CONSTRAINTS:
-    - Max 150 words. No "butler" fluff.
-    - If data is not available or null, ignore and proceed. Just mention data not available briefly.
-    - Structure: Narrative flow. No rigid headers.
-    - A separate "⚠️ CRITICAL" header ONLY if there is a severe health deficit.
-    `;
-  
-  try {
-    // Passes the prompt to Gemini via your AIGateway
-    const response = callJeanoAI(systemPrompt);
-    archiveBriefing("HEALTH_TROUBLESHOOT", response); 
-    return response;
-  } catch (e) {
-    console.error("Jeano had a brain-freeze during health synthesis:", e);
-  }
-}
-
 function generateMorningBriefing() {
   console.log("🌞 Jeano is waking up...");
 
@@ -67,67 +12,92 @@ function generateMorningBriefing() {
   
   // 2. GATHER DATA: Market Context (ETL + Web Intelligence)
   let marketIntelligence = "";
+  let portfolioNews = ""; // To capture the deep-dive news
   let etlData = null; // Declare it HERE first so it's available globally in the function
 
   try {
     etlData = dailyMarketETL(); // Step 1: Your Sheet Sieve
     marketIntelligence = getMarketIntelligence(etlData); // Step 2: Web Intelligence
-    console.info("✅ Market context successfully integrated.");
+    portfolioNews = getMarketNews(etlData.mCapBuckets); // Step 3: Integrate the nested Market News search
+    console.info("✅ Market context and News Waterfall successfully integrated."); 
   } catch (e) {
     console.warn("⚠️ Market Agent failed. Proceeding with Health-only brief. Error: " + e.message);
-    marketIntelligence = "MARKET_DATA_UNAVAILABLE";
+    marketIntelligence = marketIntelligence || "MARKET_DATA_UNAVAILABLE";
+    portfolioNews = "NEWS_UNAVAILABLE";
   }
+
+  const now = new Date();
+  const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const timeContext = {
+    current_day: dayNames[now.getDay()],
+    previous_day: dayNames[(now.getDay() + 6) % 7], // Handles Sunday -> Saturday wrap
+    current_time: Utilities.formatDate(now, "IST", "hh:mm a")
+  };
 
   // 3. CONSTRUCT THE SYNERGETIC PROMPT
   const systemPrompt = `
     ${config.Tone_Directives}
 
     IDENTITY:
-    Address the user ONLY as "Vijay" or "V". Do not use "Vijay" or "Vijay, V".
+    - Address the user ONLY once at the very beginning of the brief. 
+    - Use "Vijay" or "V" as the opening anchor. Do not repeat the name or initials thereafter.
 
-    [CONTEXT: HEALTH]
+    TEMPORAL CONTEXT:
+    - Today is ${timeContext.current_day}, and the current time is ${timeContext.current_time} IST.
+    - Previous Day: ${timeContext.previous_day}.
+    
+    TENSE RULES:
+    - Use PAST TENSE for all data from ${timeContext.previous_day} (Health logs, Yesterday's Market Close).
+    - Use PRESENT/FUTURE TENSE for all data regarding Today, ${timeContext.current_day} (GIFT Nifty, Open Indications, and Today's Actionables).
+    
+    [CONTEXT: HEALTH & ACTIVITY]
     DIRECTIVES: ${config.Health_Directives}
-    YESTERDAY'S STATS: ${healthData}
+    RAW DATA: ${healthData}
     TARGETS: BMR ${config.Daily_BMR}, Protein ${config.Protein_Target}g.
+    WORKOUT LOGS: ${healthData.workout_details || "No workout recorded"}
+    WORKOUT CALORIES: ${healthData.workout_kcal || 0} kcal
     
+    [CONTEXT: MARKET DATA]
+    1. ETL SIGNALS: ${JSON.stringify(etlData.signals)}
+    2. MACRO INDICES: ${JSON.stringify(etlData.macro)}
+    3. EXTERNAL INTELLIGENCE: ${marketIntelligence}
+    4. CONSOLIDATED NEWS REPORT: ${portfolioNews}
+
     [STRICT HIERARCHY OF TRUTH]
-    1. INTERNAL DATA (Sheet): This is 100% accurate. You MUST use this.
-    2. EXTERNAL RESEARCH (Web): This is secondary. If it says N/A, ignore it and use INTERNAL DATA.
+    1. INTERNAL DATA (Sheet/ETL): 100% accurate. Use this as the primary source.
+    2. MATH LOCK: Use the pre-calculated Net Balance and Protein Gap from RAW DATA exactly. Do NOT recalculate or "estimate" new totals.
+    3. NEWS WATERFALL: Use for regulatory context (RBI/SEBI) and ticker-specific news.
+    4. SEARCH LIMITS: If news says "Search Limit Reached," do NOT hallucinate reasons. Stick to price action (↑/↓).
+    5. EXTERNAL RESEARCH (Web): Only for macro estimation if sheet is "Unknown" or news for flagged stocks.
     
-    [CONTEXT: INTERNAL DATA]
-    1. The following trade signals were triggered by the ETL today. If a signal is present, you must include it in the brief: 
-        Signals Triggered Today: ${JSON.stringify(etlData.signals)}
-    2. The following macro data was extracted from the Sheet:    
-        Macro Indices from Sheet: ${JSON.stringify(etlData.macro)}
-    
-    [CONTEXT: EXTERNAL RESEARCH]
-    ${marketIntelligence}
+    [LOGIC GATE: DATA PRESENCE]
+    - IF HEALTH DATA IS MISSING: Do not assume fasting. State "Health data gap" in <15 words and pivot immediately to Market Pulse.
+    - IF PARTIAL DATA: Treat empty fields as "SKIPPED" (0 kcal).
 
     TASK:
-    Produce a TWO-PART brief.
+    Produce a three-part narrative morning brief. NO TABLES. NO BOLDING (**). NO HORIZONTAL RULES (---). NO LIST BULLETS.
+    
+    PART 1: THE OPENING (Morning Greet)
+    - A robust "Sentiment & Status" line combining the mood of the market (Gap logic) and health consistency.
+    - Determine the mood and emotion for the statement based on the data for the day.
 
-    PART 1: DATA AUDIT (Tables Only)
-    - Provide a "Market Pulse" table: Index/Metric | Value | Change.
-    - Provide a "Health Snapshot" table: Metric | Actual | Target | Status.
+    PART 2: HEALTH & ACTIVITY AUDIT
+    - Synthesize Yesterday's behavior. Mention Calories In vs. Net Burn (incorporating workout impact).
+    - Audit Protein against the ${config.Protein_Target}g target. 
+    - Subtle check for Gout/Hyperuricemia risks in meal logs; mention only if critical.
 
-    PART 2: THE SYNTHESIS (Narrative)
-    - Tone: Sharp, direct, and witty. No fluff.
-    - Synthesize health status and market opening into a sharp, witty morning briefing.
-    - Start with a punchy "Sentiment & Status" line.
-    - Follow the heirachy of truth mandatorily
-    - If the External Research is "N/A", focus the narrative ENTIRELY on the Internal Signals and the available Macro levels.
-    - Never say "market intelligence is a black box" if Internal Signals are present.
-    - Opening: Use the (Point B - Point A) Gap logic based on indices for the market outlook.
-    - Body: Pivot from Health Adequacy (Protein/Energy) to Market Actionables.
-    - CRITICAL: Only mention news/orders for the stocks flagged in the intelligence.
-    - Check Gout/Hyperuricemia risks in meal logs but keep it subtle but dont mention it explicitly unless necessary.
+    PART 3: MARKET SUMMARY & ACTIONABLES
+    - Structure this section into FOUR distinct paragraphs, separated by double line breaks:
+    1. LEAD PARAGRAPH: State the Index Outlook (Nifty, Gift Nifty & Nasdaq movement) and immediate opening sentiment.
+    2. ACTIONABLES PARAGRAPH: Explicitly call out stocks requiring immediate attention (Sells, Cuts, or Immediate Reviews). Group them by ticker name first.
+    3. TACTICAL & VOLATILITY PARAGRAPH: Group remaining rebalances (Averages) followed by Volatility Alerts (Holds). For Volatility Alerts, mention the percentage drops but clarify they are "Holds with no action required." Every stock in the signal data must be acknowledged individually.
+    4. MARKET NEWS PARAGRAPH: Key news or action items from news about the market or stocks in your portfolio. 
 
     CONSTRAINTS:
-    - Max 200 words. Tone: Sharp, direct, no "butler" fluff.
-    - If data is not available or null, ignore and proceed. Just mention data not available and dont spend too much words on it.
-    - Structure: Narrative flow. No rigid headers.
-    - If the Gap is significant (100pts on GIFTNIFTY, 300pts on NASDAQ), use strong sentiment (Gap Up/Down).
-    - A separate "⚠️ CRITICAL" header ONLY if there is a severe health deficit or major market order.
+    - Max 300 words. Tone: Sharp, direct, witty. No "butler" fluff.
+    - Strictly avoid Markdown formatting like Bold, Italics, or Horizontal Rules. Use plain text and line breaks for separation.
+    - Use a separate "⚠️ CRITICAL" header ONLY for severe health deficits or major market orders. 
+    - Use "⚠️ DATA GAP" for missing logs.
     `;
   
   try {

@@ -6,8 +6,9 @@
 function getMarketIntelligence(etlData) {
   console.info("🔍 Phase 1: Researching Live Markets...");
   
-  const stockContext = etlData.news_search_list.join(", ");
-  const today = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd");
+  const now = new Date();
+  const today = Utilities.formatDate(now, JEANO_TIMEZONE, "yyyy-MM-dd");
+  const yesterday = Utilities.formatDate(new Date(now.getTime() - (24 * 60 * 60 * 1000)), JEANO_TIMEZONE, "yyyy-MM-dd");
 
   // --- NEW BLOCK: Compute internal metrics for Firestore ---
   let counts = { buy: 0, sell: 0, hold: 0 };
@@ -33,49 +34,56 @@ function getMarketIntelligence(etlData) {
 
   // --- PHASE 1: THE RESEARCH (Text Response with Search ON) ---
   const researchPrompt = `
-    URGENT: I need real-time data for ${today}. 
-    Search the web for:
-    1. "GIFT Nifty Live Price Today" - find the exact number reported around 8:15 AM IST.
-    2. "Nifty 50 Previous Close" - find the official close at 3:30 PM.
-    3. "Nikkei 225 Live" and "Hang Seng Live" - get current % change.
-    4. "FII DII Activity India ${today}" - find "FII Net Cash" and "FII Long Short Ratio".
-    5. News in last 24 hours for: ${stockContext}.
+    URGENT: Market Data Request for Morning Briefing.
+    
+    1. LIVE MORNING SETUP (Current Session ${today}):
+       - Search for "GIFT Nifty Live Price" and "GIFT Nifty opening points gap up or down (against Nifty close ${yesterday})".
+       - Search for "Nikkei 225 Live" and "Hang Seng Live Index" for today's % change.
 
-    INSTRUCTION: Do not summarize. Copy-paste the relevant data snippets verbatim into your response so my parser can find them. If you cannot find data at a specific time, provide the LATEST available price and the time it was recorded.
+    2. INSTITUTIONAL DATA (Previous Session ${yesterday}):
+       - Search for "FII DII activity India ${yesterday}". 
+       - Find the "FII Net Cash" (Buy/Sell value in Crores).
+       - Find the "FII Long-Short Ratio" or "FII derivative positioning" from the ${yesterday} close.
+
+    INSTRUCTION: 
+    - Report the values clearly in your own words. 
+    - IMPORTANT: Convert all times to IST (India Standard Time).
+    - For Nikkei and Hang Seng, if the market is open, provide the current live % change.
+    - For FII data, ensure you are looking at the final figures from the most recently completed trading session (${yesterday}).
+    - Do NOT copy-paste verbatim. If a specific data point (like Long-Short ratio) is not found, state "Data not yet updated" instead of guessing.
   `;
 
-  const rawResearch = callJeanoAI(researchPrompt, { search: true, temperature: 0.3 });
+  const rawResearch = callJeanoAI(researchPrompt, "TEXT", true);
   console.log("rawResearch length: " + rawResearch.length);
 
   // --- PHASE 2: THE COMPILER (JSON Response with Search OFF) ---
   const compilerPrompt = `
-    You are a STRICT DATA EXTRACTOR, not an analyst.
+    You are a DATA EXTRACTION ENGINE. Your goal is to map RAW RESEARCH into a structured JSON format.
 
     TASK:
-    Extract values ONLY if they are EXPLICITLY PRESENT in the RAW RESEARCH text.
-    Do NOT infer, estimate, normalize, or complete missing information.
+    Extract values ONLY if they are explicitly stated in the RAW RESEARCH. 
+    If the research mentions "Data not yet updated" or "Not found", you MUST use "N/A".
 
-    HARD RULES:
-    1. You may ONLY copy literal values found verbatim or clearly stated in RAW RESEARCH.
-    2. If a value is NOT explicitly present, output "N/A".
-    3. Do NOT use prior knowledge, training data, or typical market values.
-    4. Do NOT guess, infer, or calculate.
-    5. Output MUST match the schema exactly.
-    6. Respond ONLY with valid JSON. No explanations.
+    STRICT SCHEMA RULES:
+    1. "gift_nifty": Look for the price and the points/percentage change. Capture the "date & time" if mentioned (e.g., 31 Mar 08:10 AM).
+    2. "nikkei" & "hang_seng": Capture the current percentage change for the morning session.
+    3. "fii_cash": This refers to the Net Buy/Sell value in Crores from the PREVIOUS session.
+    4. "fii_ls_ratio": This is the FII Long-Short ratio or derivative positioning percentage.
 
     RAW RESEARCH:
     ${rawResearch}
 
-    SCHEMA (all fields required):
+    JSON SCHEMA (Respond ONLY with this structure):
     {
-      "gift_nifty": { "value": "string", "change": "string" },
-      "nikkei": { "value": "string", "change": "string" },
-      "fii_cash": { "value": "string", "status": "string" },
-      "fii_ls_ratio": { "value": "string", "bias": "string" }
+      "gift_nifty": { "value": "string", "change": "string", "time": "string" },
+      "nikkei": { "change": "string" },
+      "hang_seng": { "change": "string" },
+      "fii_cash": { "value": "string", "direction": "string" },
+      "fii_ls_ratio": { "value": "string", "sentiment": "string" }
     }
   `;
 
-  const compilerRaw = callJeanoAI(compilerPrompt, { search: false, temperature: 0 });
+  const compilerRaw = callJeanoAI(compilerPrompt, "JSON", false);
   const cleanJson = sanitizeJson(compilerRaw);
 
   let marketDataJson;
@@ -149,6 +157,129 @@ function getMarketIntelligence(etlData) {
   });  
 }
 
+// --- 🌊 MARKET NEWS: THE NESTED WEB SEARCH ---
+function getMarketNews(input) {
+  console.info("🌊 Starting Waterfall-search for market news...");
+
+  // --- THE FIX: Smart Detection ---
+  // If 'input' has a property called 'mCapBuckets', use it. 
+  // Otherwise, assume 'input' IS the buckets.
+  const buckets = (input && input.mCapBuckets) ? input.mCapBuckets : input;
+
+  // --- SAFETY CHECK: If we still don't have largeCaps, something is wrong with the ETL return ---
+  if (!buckets || !buckets.largeCaps) {
+    console.error("❌ Critical: getMarketNews received invalid data.", input);
+    return "NEWS_UNAVAILABLE (Data structure mismatch)";
+  }
+
+  let totalNewsCount = 0;
+  let finalNewsReport = "";
+
+  // 1. Macro (Free Pass)
+  const macroRes = searchNewsBucket("Macro", ["SEBI", "RBI", "NSE", "BSE"]);
+  finalNewsReport += `**Macro & Regulatory:**\n${macroRes.text}\n\n`;
+
+  // 2. Large Caps (using the 'buckets' variable we defined above)
+  if (buckets.largeCaps.length > 0) {
+    const res = searchNewsBucket("Large Caps", buckets.largeCaps);
+    if (res.count > 0) {
+      finalNewsReport += `**Large Caps:**\n${res.text}\n\n`;
+      totalNewsCount += res.count;
+    }
+  }
+
+  // 3. Mid Caps (Quota check)
+  if (totalNewsCount < 5 && buckets.midCaps.length > 0) {
+    const res = searchNewsBucket("Mid Caps", buckets.midCaps);
+    if (res.count > 0) {
+      finalNewsReport += `**Mid Caps:**\n${res.text}\n\n`;
+      totalNewsCount += res.count;
+    }
+  }
+
+  // 4. Small Caps (Quota check)
+  if (totalNewsCount < 5 && buckets.smallCaps.length > 0) {
+    const res = searchNewsBucket("Small Caps", buckets.smallCaps);
+    if (res.count > 0) {
+      finalNewsReport += `**Small Caps:**\n${res.text}\n\n`;
+      totalNewsCount += res.count;
+    }
+  }
+
+  return finalNewsReport || "No significant news found for portfolio stocks.";
+}
+
+
+// --- 🔎 THE AI SEARCH ENGINE ---
+function searchNewsBucket(bucketName, targetStocks) {
+  if (!targetStocks || targetStocks.length === 0) return { text: "", count: 0 };
+
+  const stockSearchString = targetStocks.join(", ");
+  const now = new Date();
+  const today = Utilities.formatDate(now, JEANO_TIMEZONE, "yyyy-MM-dd");
+  const yesterday = Utilities.formatDate(new Date(now.getTime() - (24 * 60 * 60 * 1000)), JEANO_TIMEZONE, "yyyy-MM-dd");
+
+  const newsPrompt = `
+    URGENT: I need specific corporate news covering ${yesterday} and early morning ${today}.
+    Search the web for: "Stock market news ${stockSearchString} India" and "Corporate announcements ${stockSearchString} last 24 hours".
+
+    TASK:
+    Review the news you found for this exact list of tickers/entities: [${stockSearchString}].
+    Extract any specific catalysts (e.g., earnings, block deals, analyst downgrades, regulatory changes).
+
+    CRITICAL RULES:
+    1. Rewrite the events strictly in your own words. Do NOT quote verbatim.
+    2. ONLY output news for the requested entities.
+    3. Keep summaries concise (1-2 sentences per entity).
+    4. If NONE of the entities have news, output exactly: "NO_NEWS".
+  `;
+
+  // Explicitly passing "TEXT" and true to enable the safe search
+  const newsResearch = callJeanoAI(newsPrompt, "TEXT", true);
+  
+  if (newsResearch.trim() === "NO_NEWS" || newsResearch.includes("NO_NEWS")) {
+    return { text: "No significant corporate actions found.", count: 0 };
+  }
+
+  // Heuristic: count the number of lines that actually contain text (proxy for number of news items)
+  const lines = newsResearch.split('\n').filter(line => line.trim().length > 10);
+  const itemCount = lines.length;
+
+  return { text: newsResearch, count: itemCount };
+}
+
+function getPortfolioNews(targetStocks) {
+  if (!targetStocks || targetStocks.length === 0) {
+    return "No actionable stocks flagged for news targeting today.";
+  }
+
+  console.info(`📰 Phase 3: Targeted News Strike for ${targetStocks.length} tickers...`);
+
+  const stockSearchString = targetStocks.join(", ");
+  const now = new Date();
+  const today = Utilities.formatDate(now, JEANO_TIMEZONE, "yyyy-MM-dd");
+  const yesterday = Utilities.formatDate(new Date(now.getTime() - (24 * 60 * 60 * 1000)), JEANO_TIMEZONE, "yyyy-MM-dd");
+
+  const newsPrompt = `
+    URGENT: I need specific corporate news covering ${yesterday} and early morning ${today}.
+    Search the web for: "Stock market news ${stockSearchString} India" and "Corporate announcements ${stockSearchString} last 24 hours".
+
+    TASK:
+    Review the news you found for this exact list of tickers: [${stockSearchString}].
+    Extract any specific catalysts (e.g., earnings, block deals, analyst downgrades, management changes, order wins).
+
+    CRITICAL RULES:
+    1. Rewrite the events strictly in your own words. Do NOT quote articles verbatim.
+    2. ONLY output news for the requested tickers.
+    3. Keep summaries concise (1-2 sentences per stock).
+    4. If NONE of the tickers have news, output exactly: "No significant corporate actions found for targeted stocks today."
+  `;
+
+  // Explicitly passing "TEXT" and true to enable the safe search
+  const newsResearch = callJeanoAI(newsPrompt, "TEXT", true);
+  return newsResearch;
+}
+
 function sanitizeJson(text) {
   return text
     // remove markdown fences
@@ -162,94 +293,24 @@ function sanitizeJson(text) {
 }
 
 function enforceExtraction(stats, research) {
-  const r = research.toLowerCase();
+  const r = research.toLowerCase().replace(/,/g, ""); // Strip commas from research once
 
-  for (const section of Object.values(stats)) {
-    for (const v of Object.values(section)) {
-      if (v !== "N/A" && !r.includes(v.toLowerCase())) {
-        throw new Error("Hallucinated value detected: " + v);
+  for (const [sectionKey, section] of Object.entries(stats)) {
+    for (const [key, v] of Object.entries(section)) {
+      // 1. Skip N/A and Sentiment/Bias fields (which are pure text)
+      if (v === "N/A" || key === "time" || key === "sentiment" || key === "direction") continue;
+
+      // 2. Extract only the digits and decimals
+      const numMatch = v.toString().match(/[\d.]+/);
+      
+      if (numMatch) {
+        const num = numMatch[0];
+        // 3. Check if the raw numbers exist in the research
+        if (!r.includes(num)) {
+          throw new Error(`Hallucination Check Failed: ${sectionKey}.${key} (${num}) not found in research.`);
+        }
       }
     }
   }
 }
 
-
-// /**
-//  * JEANO: Market Intelligence Engine
-//  * Consolidates Sheet Macros with Live Web Search
-//  */
-// function getMarketIntelligence(etlData) {
-//   console.info("🔍 Initializing Market Intelligence Scan...");
-
-//   const stockContext = etlData.news_search_list.join(", ");
-//   const today = new Date();
-
-//   // 2. Build the Multi-Source Search & Synthesis Prompt
-//   const prompt = `
-//     You are Jeano's Stock Market SME. Provide a Morning Brief for ${today}.
-    
-//     [INTERNAL MACRO BASELINE]: ${JSON.stringify(etlData.macro)}
-    
-//     [EXTERNAL SEARCH REQUIREMENTS]
-//     1. GIFT Nifty Temporal Delta: 
-//        - Point A: Price at 3:30 PM IST (Previous Session Close).
-//        - Point B: LIVE Price as of 8:15 AM IST Today.
-//        - Calculation: Delta (B - A) in points and %.
-//     2. Global/Asian Pulse: 
-//        - Status & Trend for Shanghai Composite, Nikkei 225, and Hang Seng.
-//        - Recap of US Market (Dow/Nasdaq) closing sentiment from Friday/last night.
-//     3. Institutional Flow: Latest FII Net Cash activity and Index Future Long:Short ratio.
-//     4. Macro Audit: Provide 24h live updates for BRENT OIL, BITCOIN, and USDINR only if they differ by >1% from the Internal Baseline.
-//     5. 24h Ticker News: Scan for "New Orders" or "Headlines" for: ${stockContext}.
-
-//     [STRICT OUTPUT STRUCTURE]
-//     SECTION 1: THE DATA TABLE
-//     - Render a Markdown table including: GIFT Nifty Delta, Global Indices (% Change), FII Data, and audited Macro Commodities.
-
-//     SECTION 2: THE NARRATIVE
-//     - Sentiment: Start with a clear "Opening Outlook" based on Global + GIFT Nifty data.
-//     - Global Drivers: Explain the "Why" behind the US/Asia trends (e.g., policy shifts, earnings).
-//     - Ticker Intelligence: Summarize news for your holdings.
-
-//     Note: Be mathematically precise. If the GIFT Nifty gap is > 100 points, do not call it "flat."
-//   `;
-
-//   return callJeanoAI(prompt);
-// }
-
-// /**
-//  * JEANO: Market Intelligence Engine (V2 - Two-Part Brief)
-//  */
-// function getMarketIntelligence(etlData) {
-//   console.info("🔍 Initializing Market Intelligence Scan...");
-//   const stockContext = etlData.news_search_list.join(", ");
-//   var today = new Date();
-  
-//   const systemPrompt = `
-//     You are Jeano's Market SME. 
-//     DATE: ${today}
-    
-//     [LOGIC GATES]
-//     - Point A: GIFT Nifty Price at 3:30 PM IST on previous market session/day.
-//     - Point B: GIFT Nifty LIVE Price at 7:30 AM IST Today.
-//     - Today's Gap = (Point B - Point A) points.
-
-//     [TASK]
-//     Produce a TWO-PART brief.
-
-//     PART 1: THE DATA TABLE
-//     - Render a Markdown table with these columns: Index | Value | Change/Status.
-//     - Rows: GIFT Nifty (Live vs Prev 3:30pm), Gap (Pts & %), Nikkei 225, Hang Seng, KOSPI, FII Cash Net, FII Long:Short.
-
-//     PART 2: THE NARRATIVE
-//     - Sentiment: Start with a clear bullish/bearish call based on the Gap.
-//     - Asian Context: Explain the Nikkei/KOSPI moves (e.g., Takaichi win stimulus).
-//     - Stock News: Search for "New Orders" or "Headlines" for these stocks: ${stockContext}.
-
-//     INTEGRATION RULES:
-//     - Compare the market trends of US, Asia and give a overall trend with a level of certainity.
-//     - If my Sheet Macro data (like OIL or BTC) is outdated, provide the 24h live update.
-//   `;
-
-//   return callJeanoAI(systemPrompt);
-// }

@@ -72,8 +72,23 @@ function getHealthContext(tier = "DAILY", lookbackDays = 1, offset = 1) {
 
     const workouts = allRecentWorkouts.filter(w => {
       const f = w.fields || w;
+      // console.log(`🔍 [DEBUG] Document Keys: ${Object.keys(f).join(", ")}`);
+
       const ts = f.session_date?.timestampValue || f.created_at?.timestampValue;
-      return ts ? Utilities.formatDate(new Date(ts), JEANO_TIMEZONE, "yyyy-MM-dd") === dateStr : false;
+
+      if (!ts) {
+        console.warn(`⚠️ [DEBUG] No timestamp found for workout. Raw Field: ${JSON.stringify(f.session_date)}`);
+        return false;
+      }
+      const dateFromTs = new Date(ts);
+      const formattedTs = Utilities.formatDate(dateFromTs, JEANO_TIMEZONE, "yyyy-MM-dd");
+
+      // LOG 2: Check the Comparison
+      // console.log(`📊 [DEBUG] Comparing -> Firestore TS: ${ts} | Formatted: ${formattedTs} | Target Date: ${dateStr}`);
+
+      return formattedTs === dateStr;
+
+      // return ts ? Utilities.formatDate(new Date(ts), JEANO_TIMEZONE, "yyyy-MM-dd") === dateStr : false;
     });
 
     const safeNum = (v) => {
@@ -87,16 +102,41 @@ function getHealthContext(tier = "DAILY", lookbackDays = 1, offset = 1) {
     let dayStr = `\n[DATE: ${dateStr}]\nTimeline: `;
 
     // --- STEP A: PROCESS WORKOUTS FIRST ---
+    // workouts.forEach(w => {
+    //   const wFields = w.fields || w;
+    //   const type = safeStr(wFields.workout_name); 
+    //   const burn = safeNum(wFields.calories_burned);
+    //   const duration = safeNum(wFields.duration_minutes); // Extract duration
+
+    //   totalBurnout += burn;
+    //   totalWorkoutDuration += duration;
+    //   workoutSummary += `${type} (${duration}m, ${burn} kcal); `;
+    //   dayStr += `Workout: ${type} (~${Math.round(burn)} kcal); `;
+    // });
+
     workouts.forEach(w => {
       const wFields = w.fields || w;
-      const type = safeStr(wFields.workout_name); 
-      const burn = safeNum(wFields.calories_burned);
-      const duration = safeNum(wFields.duration_minutes); // Extract duration
+      const type = safeStr(wFields.activity_type); 
+      const rawDurationText = safeStr(wFields.raw_entry_text); // e.g., "10min"
+      
+      // 1. Extract the number from the string (e.g., "10min" -> 10)
+      const durationMatch = rawDurationText.match(/(\d+)/);
+      const duration = durationMatch ? parseInt(durationMatch[1]) : 0;
+
+      // 2. Estimate burn based on activity type (Simplified metabolic rates)
+      let burnRate = 5; // Default: 5 kcal/min
+      if (type.includes("Elliptical")) burnRate = 9;
+      if (type.includes("Treadmill")) burnRate = 8;
+      if (type.includes("Weight")) burnRate = 4;
+
+      const burn = duration * burnRate;
 
       totalBurnout += burn;
       totalWorkoutDuration += duration;
-      workoutSummary += `${type} (${duration}m, ${burn} kcal); `;
-      dayStr += `Workout: ${type} (~${Math.round(burn)} kcal); `;
+      workoutSummary += `${type} (${duration}m, ~${burn} kcal); `;
+      
+      // Add to dayStr so it is visible to Gemini
+      dayStr += `Workout: ${type} (${duration} min, ~${Math.round(burn)} kcal); `;
     });
 
     // --- STEP B: PROCESS MEALS ---
@@ -164,8 +204,11 @@ function getHealthContext(tier = "DAILY", lookbackDays = 1, offset = 1) {
     const netBalance = totals.kcal - totalOut;
     const pGap = totals.protein - pTarget;
 
+    console.log(`✅ [CALCULATION CHECK] Date: ${dateStr} | Duration: ${totalWorkoutDuration}m | Burn: ${totalBurnout}kcal | Summary: ${workoutSummary}`);
+
     dayStr += `\nEnergy: In ${Math.round(totals.kcal)} - Out ${Math.round(totalOut)} = Net ${Math.round(netBalance)} kcal\n`;
     dayStr += `Macros: P ${Math.round(totals.protein)}g (${Math.round(pGap)}g vs target) | C ${Math.round(totals.carbs)}g | F ${Math.round(totals.fat)}g\n`;
+    dayStr += `Workout: ${workoutSummary || "No physical activity logged."}\n`;
 
     if (gaps.length > 0) dayStr += `⚠️ MISSING: ${gaps.join(", ")}\n`;
     finalNarrative += dayStr;
