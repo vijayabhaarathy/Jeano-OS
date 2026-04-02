@@ -1,0 +1,12 @@
+﻿# Ignore Clasp internal system files
+.clasp.json
+project.json
+
+# Ignore Local Debug & Private Data Files
+Debug_*
+*_Key*
+Debug_Key Storage.js
+
+# Ignore OS/Environment specific files
+Thumbs.db
+.DS_Store

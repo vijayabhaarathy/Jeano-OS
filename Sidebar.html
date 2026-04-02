@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Inter:wght@400;600&display=swap" rel="stylesheet">
+    <style>
+      :root {
+        --bg-color: #0f172a;
+        --card-bg: rgba(30, 41, 59, 0.7);
+        --primary: #38bdf8; /* Cyan for Orchestrator */
+        --health: #4ade80;  /* Green for Health */
+        --market: #fbbf24;  /* Amber for Market */
+        --text: #f1f5f9;
+        --text-dim: #94a3b8;
+        --border: rgba(255, 255, 255, 0.1);
+      }
+
+      body {
+        font-family: 'Inter', sans-serif;
+        background-color: var(--bg-color);
+        color: var(--text);
+        margin: 0;
+        padding: 0;
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+      }
+
+      /* --- Header --- */
+      .header {
+        background: linear-gradient(180deg, rgba(15,23,42,1) 0%, rgba(15,23,42,0) 100%);
+        padding: 20px;
+        text-align: center;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .logo-area {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        margin-bottom: 5px;
+      }
+
+      .jeano-title {
+        font-family: 'JetBrains Mono', monospace;
+        font-weight: 700;
+        font-size: 1.2rem;
+        letter-spacing: 2px;
+        color: var(--primary);
+        text-shadow: 0 0 10px rgba(56, 189, 248, 0.3);
+      }
+
+      .status-dot {
+        width: 8px;
+        height: 8px;
+        background-color: var(--health);
+        border-radius: 50%;
+        box-shadow: 0 0 8px var(--health);
+        animation: pulse 2s infinite;
+      }
+
+      /* --- Tabs --- */
+      .tabs {
+        display: flex;
+        padding: 10px 15px;
+        gap: 10px;
+        background: rgba(0,0,0,0.2);
+      }
+
+      .tab-btn {
+        flex: 1;
+        background: transparent;
+        border: none;
+        color: var(--text-dim);
+        padding: 8px;
+        font-size: 0.75rem;
+        font-weight: 600;
+        cursor: pointer;
+        border-bottom: 2px solid transparent;
+        transition: all 0.3s;
+      }
+
+      .tab-btn.active {
+        color: var(--text);
+        border-bottom-color: var(--primary);
+      }
+      
+      .tab-btn[data-target="market"].active { border-bottom-color: var(--market); }
+      .tab-btn[data-target="health"].active { border-bottom-color: var(--health); }
+
+      /* --- Content Area --- */
+      .main-content {
+        flex: 1;
+        padding: 20px;
+        overflow-y: auto;
+      }
+
+      .agent-panel {
+        display: none;
+        animation: fadeIn 0.3s ease;
+      }
+      
+      .agent-panel.active { display: block; }
+
+      .card {
+        background: var(--card-bg);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 15px;
+        margin-bottom: 15px;
+        backdrop-filter: blur(10px);
+      }
+
+      .card-title {
+        font-size: 0.8rem;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        color: var(--text-dim);
+        margin-bottom: 10px;
+        display: flex;
+        justify-content: space-between;
+      }
+
+      /* --- Action Buttons --- */
+      .action-btn {
+        width: 100%;
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid var(--border);
+        color: var(--text);
+        padding: 12px;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 0.85rem;
+        font-weight: 500;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 8px;
+        transition: all 0.2s;
+      }
+
+      .action-btn:hover {
+        background: rgba(255, 255, 255, 0.1);
+        transform: translateX(2px);
+      }
+
+      .action-btn.primary {
+        background: linear-gradient(90deg, rgba(56, 189, 248, 0.1) 0%, rgba(56, 189, 248, 0) 100%);
+        border-color: rgba(56, 189, 248, 0.3);
+        color: var(--primary);
+      }
+      
+      .action-btn.market {
+        background: linear-gradient(90deg, rgba(251, 191, 36, 0.1) 0%, rgba(251, 191, 36, 0) 100%);
+        border-color: rgba(251, 191, 36, 0.3);
+        color: var(--market);
+      }
+
+      /* --- Terminal Console --- */
+      .terminal {
+        background: #000;
+        border-top: 1px solid var(--border);
+        padding: 15px;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.7rem;
+        height: 120px;
+        overflow-y: auto;
+      }
+
+      .log-line { margin-bottom: 4px; color: var(--text-dim); }
+      .log-line.success { color: var(--health); }
+      .log-line.warn { color: var(--market); }
+      .log-line.info { color: var(--primary); }
+
+      @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
+      @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+    </style>
+  </head>
+  <body>
+
+    <div class="header">
+      <div class="logo-area">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke="url(#grad1)"/>
+          <defs>
+            <linearGradient id="grad1" x1="0%" y1="0%" x2="100%" y2="0%">
+              <stop offset="0%" style="stop-color:var(--primary);stop-opacity:1" />
+              <stop offset="100%" style="stop-color:var(--market);stop-opacity:1" />
+            </linearGradient>
+          </defs>
+        </svg>
+        <span class="jeano-title">JEANO // OS</span>
+      </div>
+      <div style="font-size: 0.7rem; color: var(--text-dim);">Central Command V4.1</div>
+    </div>
+
+    <div class="tabs">
+      <button class="tab-btn active" onclick="switchTab('orch', this)">SYSTEM</button>
+      <button class="tab-btn" data-target="market" onclick="switchTab('market', this)">MARKET</button>
+      <button class="tab-btn" data-target="health" onclick="switchTab('health', this)">HEALTH</button>
+    </div>
+
+    <div class="main-content">
+      
+      <div id="orch" class="agent-panel active">
+        <div class="card">
+          <div class="card-title">Daily Operations <span class="status-dot" style="background:var(--primary)"></span></div>
+          <button class="action-btn primary" onclick="runFunc('generateMorningBriefing', 'Generating Briefing...')">
+            <span>🌅 Morning Synthesis</span>
+            <span>→</span>
+          </button>
+           <button class="action-btn" onclick="runFunc('migrationSmokeTest', 'Verifying Connections...')">
+            <span>🛠️ System Check</span>
+            <span>→</span>
+          </button>
+        </div>
+      </div>
+
+      <div id="market" class="agent-panel">
+        <div class="card" style="border-color: rgba(251, 191, 36, 0.2);">
+          <div class="card-title" style="color:var(--market)">Investments <span class="status-dot" style="background:var(--market)"></span></div>
+          <button class="action-btn market" onclick="runFunc('dailyMarketETL', 'Filtering Signals...')">
+            <span>📈 Daily Sync & Sieve</span>
+            <span>⚡</span>
+          </button>
+          <button class="action-btn" onclick="runFunc('getMarketContext', 'Reading Portfolio...')">
+            <span>👁️ View Live Context</span>
+            <span>JSON</span>
+          </button>
+        </div>
+      </div>
+
+      <div id="health" class="agent-panel">
+        <div class="card" style="border-color: rgba(74, 222, 128, 0.2);">
+          <div class="card-title" style="color:var(--health)">Biometrics <span class="status-dot" style="background:var(--health)"></span></div>
+          <button class="action-btn" style="color:var(--health); border-color:rgba(74, 222, 128, 0.3);" onclick="runFunc('fitness_weeklySync', 'Syncing Logs...')">
+            <span>🧬 Sync Health Logs</span>
+            <span>sync</span>
+          </button>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="terminal" id="console">
+      <div class="log-line">> JEANO_ORCHESTRATOR initialized...</div>
+      <div class="log-line">> Connecting to Firestore [jeano-pro]...</div>
+      <div class="log-line success">> Connection Established (23ms)</div>
+      <div class="log-line">> Awaiting command_</div>
+    </div>
+
+    <script>
+      // Tab Switching Logic
+      function switchTab(panelId, btn) {
+        // Hide all panels
+        document.querySelectorAll('.agent-panel').forEach(p => p.classList.remove('active'));
+        // Show target panel
+        document.getElementById(panelId).classList.add('active');
+        
+        // Update button states
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+      }
+
+      // Universal Runner Function
+      function runFunc(functionName, loadingText) {
+        log(`> Executing: ${functionName}()`, 'info');
+        log(`> Status: ${loadingText}`);
+        
+        google.script.run
+          .withSuccessHandler((response) => {
+             log(`> Success: Task Completed.`, 'success');
+             if(response) log(`> Output: ${String(response).substring(0, 30)}...`);
+             log(`> Awaiting command_`);
+          })
+          .withFailureHandler((err) => {
+             log(`> ERROR: ${err.message}`, 'warn');
+          })
+          [functionName](); // Dynamic function call
+      }
+
+      // Console Logger
+      function log(text, type = '') {
+        const consoleDiv = document.getElementById('console');
+        const line = document.createElement('div');
+        line.className = `log-line ${type}`;
+        line.innerText = text;
+        consoleDiv.appendChild(line);
+        consoleDiv.scrollTop = consoleDiv.scrollHeight;
+      }
+    </script>
+  </body>
+</html>
