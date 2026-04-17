@@ -108,6 +108,7 @@ function processDailyLogs(isFullSync) {
       });
       Utilities.sleep(200);
     }
+    console.log(`ETL Completed: Row ${startRow + rowIndex} of ${lastRow}`);
   });
   
   console.log(`Sync Completed for rows ${startRow} to ${lastRow}`);

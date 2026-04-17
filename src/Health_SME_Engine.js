@@ -52,16 +52,16 @@ function getHealthContext(tier = "DAILY", lookbackDays = 1, offset = 1) {
   }
 
   let finalNarrative = `--- HEALTH SME DATA [Tier: ${tier}] ---\n`;
+  let totals = { kcal: 0, carbs: 0, protein: 0, fat: 0 };
+  let totalBurnout = 0;
+  let totalWorkoutDuration = 0; 
 
   // 4. PROCESS EACH DATE
   dates.forEach(dateStr => {
-    console.log(`\n--- 📅 SCANNING: ${dateStr} ---`);
-    let totals = { kcal: 0, carbs: 0, protein: 0, fat: 0 };
+    console.log(`📅 SCANNING: ${dateStr} ---`);
     let gaps = [];
     let unknownMealsBatch = [];
     let workoutSummary = ""; 
-    let totalBurnout = 0;
-    let totalWorkoutDuration = 0; // New accumulator
     let batchResults = null; // Initialize at the date-loop level
 
     const meals = allRecentMeals.filter(m => {
@@ -102,18 +102,6 @@ function getHealthContext(tier = "DAILY", lookbackDays = 1, offset = 1) {
     let dayStr = `\n[DATE: ${dateStr}]\nTimeline: `;
 
     // --- STEP A: PROCESS WORKOUTS FIRST ---
-    // workouts.forEach(w => {
-    //   const wFields = w.fields || w;
-    //   const type = safeStr(wFields.workout_name); 
-    //   const burn = safeNum(wFields.calories_burned);
-    //   const duration = safeNum(wFields.duration_minutes); // Extract duration
-
-    //   totalBurnout += burn;
-    //   totalWorkoutDuration += duration;
-    //   workoutSummary += `${type} (${duration}m, ${burn} kcal); `;
-    //   dayStr += `Workout: ${type} (~${Math.round(burn)} kcal); `;
-    // });
-
     workouts.forEach(w => {
       const wFields = w.fields || w;
       const type = safeStr(wFields.activity_type); 
@@ -262,7 +250,14 @@ function getHealthContext(tier = "DAILY", lookbackDays = 1, offset = 1) {
   }); // End dates.forEach
 
   console.log("🏁 [ENGINE FINISHED] Narrative built successfully.");
-  return finalNarrative;
+  return {
+    narrative: finalNarrative,
+    totals: {
+      kcal: totals.kcal,
+      protein: totals.protein
+    },
+    totalBurnout: totalBurnout
+  };
 }
 
 /**

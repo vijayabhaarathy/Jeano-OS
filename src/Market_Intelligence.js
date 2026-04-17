@@ -157,6 +157,8 @@ function getMarketIntelligence(etlData) {
   });  
 }
 
+// ======================================================================================================= //
+
 // --- 🌊 MARKET NEWS: THE NESTED WEB SEARCH ---
 function getMarketNews(input) {
   console.info("🌊 Starting Waterfall-search for market news...");
@@ -209,6 +211,7 @@ function getMarketNews(input) {
   return finalNewsReport || "No significant news found for portfolio stocks.";
 }
 
+// ======================================================================================================= //
 
 // --- 🔎 THE AI SEARCH ENGINE ---
 function searchNewsBucket(bucketName, targetStocks) {
@@ -248,6 +251,8 @@ function searchNewsBucket(bucketName, targetStocks) {
   return { text: newsResearch, count: itemCount };
 }
 
+// ======================================================================================================= //
+
 function getPortfolioNews(targetStocks) {
   if (!targetStocks || targetStocks.length === 0) {
     return "No actionable stocks flagged for news targeting today.";
@@ -280,6 +285,121 @@ function getPortfolioNews(targetStocks) {
   return newsResearch;
 }
 
+// ======================================================================================================= //
+
+/**
+ * WEEKLY EXCLUSIVE: Fetches Silo B (Corporate) or Silo C (Macro) records.
+ * Implements "Cold Extraction" logic to prevent causal hallucinations.
+ *
+ * @param {String} siloType - "CORPORATE_RECORDS" or "MACRO_REGULATORY"
+ * @param {Array} targetStocks - The outlier tickers (Top/Bottom 3) from Silo A.
+ * @param {String} targetWeekStr - The Sunday/Saturday anchor date for context.
+ * @returns {String} The raw text response from the AI.
+ */
+function getWeeklySiloData(siloType, targetStocks = [], targetWeekStr) {
+  const JEANO_TIMEZONE = "GMT+5:30"; // Ensure this is available
+  console.info(`🛰️ START: Weekly Silo Extraction [Type: ${siloType}]`);
+  
+  // --- ADD THESE CALCULATIONS ---
+  const endDate = new Date(targetWeekStr + "T00:00:00+05:30");
+  const startDate = new Date(endDate.getTime() - (6 * 24 * 60 * 60 * 1000));
+  const startDateStr = Utilities.formatDate(startDate, JEANO_TIMEZONE, "MMMM d");
+  const endDateStr = Utilities.formatDate(endDate, JEANO_TIMEZONE, "MMMM d");
+  // ------------------------------
+
+  const stockSearchString = targetStocks.join(", ");
+  let specificPrompt = "";
+
+  // 1. SILO SELECTION LOGIC
+  if (siloType === "CORPORATE_RECORDS") {
+    console.log(`🔍 Targeting Corporate Records for: ${stockSearchString}`);
+    
+    specificPrompt = `
+      TASK: Extract standalone corporate records for this exact ticker list: [${stockSearchString}].
+      STRICT WINDOW: Only events from ${startDateStr} to ${endDateStr}.
+      
+      SEARCH STRATEGY: "Corporate announcements ${stockSearchString} India", "BSE NSE stock news ${stockSearchString}".
+
+      STRICT DATA CONTRACT RULES:
+      1. FORMAT: [Ticker]: [Event Name] - [Summary].
+      2. ABSENCE: If no specific corporate action is found for a ticker, return "[Ticker]: NO RECORDS FOUND".
+      3. COLD EXTRACTION: Remove all causal verbs (e.g., skip "because", "due to", "driven by").
+      4. ISOLATION: Provide ONLY factual events. Do NOT mention stock price movement or % gains/losses.
+      5. NO VERBATIM: Summarize in concise, professional prose (1-2 sentences).
+    `;
+  } else {
+    console.log(`🌍 Targeting Macro/Regulatory Records for week ending ${endDateStr}`);
+    
+    specificPrompt = `
+      TASK: Extract standalone Macro records for the week of ${startDateStr} to ${endDateStr} ONLY.
+      
+      CRITICAL TEMPORAL FENCE: 
+      - Today is ${endDateStr}. 
+      - ONLY include news that happened between ${startDateStr} and ${targetWeekStr}.
+      - DO NOT include news from before ${startDateStr}
+      - If a major domestic event didn't happen THIS WEEK, skip it.
+    
+      REQUIREMENTS:
+      1. GLOBAL: Significant headlines in Geopolitics, Oil, and major US Market events.
+      2. DOMESTIC: SEBI circulars, RBI policy updates, or Finance Ministry announcements.
+      
+      STRICT DATA CONTRACT RULES:
+      1. COLD EXTRACTION: Standalone facts only. No causal language linking events to market moves.
+      2. ISOLATION: Do NOT mention Nifty 50 impact or portfolio performance.
+      3. FORMAT: Bulleted list of facts.
+    `;
+  }
+
+  // 2. EXECUTION
+  try {
+    console.log(`📤 Prompting AI with Window: ${startDateStr} to ${endDateStr}`);
+    const result = callJeanoAI(specificPrompt, "TEXT", true);
+    
+    // 3. LOGGING & VALIDATION
+    if (!result || result.trim() === "") {
+      console.warn(`⚠️ WARNING: ${siloType} returned an empty response.`);
+      return "NO DATA RETRIEVED";
+    }
+    
+    console.info(`✅ ${siloType} Extraction Result:`);
+    console.log(result); // Explicitly log the full response
+    
+    return result;
+    
+  } catch (e) {
+    console.error(`❌ ERROR: Failed to fetch ${siloType}.`, e.message);
+    return `ERROR_FETCHING_${siloType}`;
+  }
+}
+
+// ======================================================================================================= //
+
+/**
+ * UTILITY: Sorts the Weekly Payload to identify the 6 outliers for Silo B.
+ * Use this in your Weekly Orchestrator.
+ */
+function identifyOutliers(payload) {
+  console.log("⚖️ Sorting Portfolio for Outlier Extraction...");
+  
+  if (!payload.portfolio || payload.portfolio.length === 0) {
+    console.warn("⚠️ No portfolio data found in payload.");
+    return [];
+  }
+
+  // Create a copy and sort by % change
+  const sorted = [...payload.portfolio].sort((a, b) => b.change_pct - a.change_pct);
+  
+  const leaders = sorted.slice(0, 3).map(s => s.stock);
+  const laggards = sorted.slice(-3).map(s => s.stock);
+  
+  console.info(`🚀 Leaders: [${leaders.join(", ")}] | 📉 Laggards: [${laggards.join(", ")}]`);
+  
+  // Combine and remove duplicates (if portfolio is very small)
+  return [...new Set([...leaders, ...laggards])];
+}
+
+// ======================================================================================================= //
+
 function sanitizeJson(text) {
   return text
     // remove markdown fences
@@ -291,6 +411,8 @@ function sanitizeJson(text) {
     .replace(/\u00A0/g, " ")
     .trim();
 }
+
+// ======================================================================================================= //
 
 function enforceExtraction(stats, research) {
   const r = research.toLowerCase().replace(/,/g, ""); // Strip commas from research once
@@ -313,4 +435,6 @@ function enforceExtraction(stats, research) {
     }
   }
 }
+
+// ======================================================================================================= //
 
